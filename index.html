@@ -3,25 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Веб-приложение Маски для Лица</title>
+    <title>Веб-приложение Маски для Лица (Локальные модели)</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div id="loading-message">
-        Загрузка моделей и запуск камеры... Пожалуйста, подождите.
+        Загрузка локальных моделей и запуск камеры... Пожалуйста, подождите.
         <div class="spinner"></div>
     </div>
 
     <div class="container">
-        <!-- Видео будет зеркальным, как в селфи-камере -->
         <video id="video" width="720" height="560" autoplay muted playsinline></video>
-        <!-- Холст для рисования масок поверх видео -->
         <canvas id="canvas"></canvas>
     </div>
 
-    <!-- Подключаем библиотеку face-api.js (последняя стабильная версия) -->
-    <!-- Мы используем CDN для простоты, можно скачать и подключить локально -->
-    <script defer src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1/dist/face-api.min.js"></script>
+    <!-- ИЗМЕНЕНО: Подключаем локальную версию face-api.js -->
+    <script defer src="libs/face-api.min.js"></script>
     <!-- Подключаем наш скрипт -->
     <script defer src="script.js"></script>
 </body>
