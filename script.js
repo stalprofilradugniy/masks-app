@@ -4,7 +4,8 @@ const canvas = document.getElementById('canvas');
 const loadingMessage = document.getElementById('loading-message');
 const ctx = canvas.getContext('2d');
 
-// Пути к изображениям масок (ЗАМЕНИТЕ НА СВОИ ФАЙЛЫ В ПАПКЕ /masks!)
+// --- ВАЖНО: УБЕДИСЬ, ЧТО ЭТИ ПУТИ ТОЧНО СОВПАДАЮТ С ФАЙЛАМИ В ПАПКЕ /masks В РЕПОЗИТОРИИ ---
+// --- ПРОВЕРЬ РЕГИСТР БУКВ И РАСШИРЕНИЕ .png ---
 const glassesPaths = [
     'masks/glasses1.png',
     'masks/glasses2.png',
@@ -19,219 +20,291 @@ const crownPaths = [
     'masks/crown4.png',
     'masks/crown5.png',
 ];
+// -----------------------------------------------------------------------------------------
 
 // Объединяем все маски в один массив
 const allMaskPaths = [...glassesPaths, ...crownPaths];
 let currentMaskIndex = -1; // Индекс текущей маски (-1 означает нет маски)
 let currentMaskImage = null; // Загруженное изображение текущей маски
 let maskLoadPromise = null; // Promise для отслеживания загрузки маски
+let faceDetectionIntervalId = null; // ID для интервала детекции
+let isDetecting = false; // Флаг, чтобы избежать параллельного запуска детекции
 
 // Функция для загрузки моделей face-api.js
 async function loadModels() {
-    // Путь к папке с моделями. Так как мы используем CDN face-api,
-    // он сам знает, откуда загружать модели по этому относительному пути.
-    // Если бы face-api.min.js лежал локально, нужно было бы рядом создать папку models
-    // и положить туда файлы моделей (их можно скачать с репозитория face-api.js).
-    const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1/model'; // Или локальный путь '/models'
-
+    const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1/model';
     console.log('Загрузка моделей face-api...');
-    // Загружаем необходимые модели:
-    // SsdMobilenetv1 - быстрая модель для обнаружения лиц
-    // FaceLandmark68Net - модель для нахождения 68 точек (landmarks) на лице
-    await Promise.all([
-        faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
-        faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL)
-    ]);
-    console.log('Модели загружены.');
+    try {
+        await Promise.all([
+            faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+            faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL)
+        ]);
+        console.log('Модели загружены.');
+        return true;
+    } catch (err) {
+        console.error('Ошибка загрузки моделей:', err);
+        loadingMessage.innerText = `Ошибка загрузки моделей: ${err.message}. Попробуйте обновить страницу.`;
+        return false;
+    }
 }
 
 // Функция для запуска видео с веб-камеры
 async function startVideo() {
     console.log('Запрос доступа к камере...');
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'user' } // Запрашиваем фронтальную камеру
-        });
+        // Запрашиваем стандартные размеры, если возможно
+        const constraints = {
+             video: {
+                width: { ideal: 720 },
+                height: { ideal: 560 },
+                facingMode: 'user'
+             }
+        };
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
         video.srcObject = stream;
         console.log('Камера успешно запущена.');
-        // Ждем, пока метаданные видео (включая размеры) будут загружены
         return new Promise((resolve) => {
             video.onloadedmetadata = () => {
-                console.log('Метаданные видео загружены.');
+                // Устанавливаем реальные размеры видео как размеры элемента video и canvas
+                // чтобы избежать искажений aspect ratio
+                video.width = video.videoWidth;
+                video.height = video.videoHeight;
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                console.log(`Метаданные видео загружены. Размеры: ${video.videoWidth}x${video.videoHeight}`);
                 resolve(true);
             };
+             video.onerror = (err) => {
+                console.error('Ошибка видео элемента:', err);
+                loadingMessage.innerText = `Ошибка видео: ${err}. Попробуйте обновить страницу или проверить камеру.`;
+                resolve(false); // Резолвим как false при ошибке видео
+            }
         });
     } catch (err) {
         console.error('Ошибка доступа к камере:', err);
-        loadingMessage.innerText = `Ошибка доступа к камере: ${err.message}. Убедитесь, что вы разрешили доступ.`;
+        loadingMessage.innerText = `Ошибка доступа к камере: ${err.message}. Убедитесь, что вы разрешили доступ и камера не используется другим приложением.`;
         return false;
     }
 }
 
 // Функция для смены маски на случайную
 function switchMask() {
+    if (allMaskPaths.length === 0) {
+        console.warn("Нет доступных масок для переключения.");
+        currentMaskImage = null; // Убедимся, что маска сброшена
+        return; // Выходим, если массив пуст
+    }
+
     let newIndex;
-    // Выбираем случайный индекс, отличный от текущего (если масок больше 1)
     if (allMaskPaths.length > 1) {
         do {
             newIndex = Math.floor(Math.random() * allMaskPaths.length);
         } while (newIndex === currentMaskIndex);
     } else {
-        newIndex = 0; // Если маска одна, всегда выбираем её
+        newIndex = 0;
     }
 
     currentMaskIndex = newIndex;
     const maskPath = allMaskPaths[currentMaskIndex];
     console.log(`Загрузка маски: ${maskPath}`);
+    currentMaskImage = null; // Сбрасываем текущую маску перед загрузкой новой
 
-    // Создаем новый объект Image и начинаем загрузку
     const img = new Image();
-    img.crossOrigin = 'anonymous'; // Важно, если маски с другого домена (но у нас локальные)
+    img.crossOrigin = 'anonymous'; // На всякий случай, хотя для локальных путей не строго нужно
 
-    // Создаем Promise, который разрешится, когда маска загрузится (или с ошибкой)
     maskLoadPromise = new Promise((resolve, reject) => {
         img.onload = () => {
             console.log(`Маска ${maskPath} загружена.`);
-            currentMaskImage = img; // Сохраняем загруженное изображение
-            resolve(); // Сигнализируем об успешной загрузке
+            currentMaskImage = img;
+            resolve();
         };
         img.onerror = (err) => {
-            console.error(`Ошибка загрузки маски: ${maskPath}`, err);
-            currentMaskImage = null; // Сбрасываем маску в случае ошибки
-            reject(err); // Сигнализируем об ошибке
+            console.error(`Ошибка загрузки маски: ${maskPath}. Проверьте путь и наличие файла!`, err);
+            // Не реджектим промис, чтобы приложение не падало,
+            // просто currentMaskImage останется null.
+            // В detectFaceAndDrawMask будет проверка на null.
+             currentMaskImage = null; // Убедимся что маска null
+             resolve(); // Все равно резолвим, чтобы цикл детекции продолжился
         };
     });
 
-    img.src = maskPath; // Начинаем загрузку изображения
+    img.src = maskPath; // Начинаем загрузку
 }
 
 // Основная функция для обнаружения лиц и рисования
 async function detectFaceAndDrawMask() {
+    // Предотвращаем повторный запуск, если предыдущий еще не завершился
+    if (isDetecting) {
+        return;
+    }
+    isDetecting = true;
+
+    // Проверяем, готово ли видео
+    if (video.readyState < video.HAVE_CURRENT_DATA) {
+         console.log("Видео еще не готово для детекции.");
+         isDetecting = false;
+         requestAnimationFrame(detectFaceAndDrawMask); // Попробовать снова в следующем кадре
+         return;
+    }
+
+
     // Ожидаем завершения загрузки текущей маски, если она еще грузится
     if (maskLoadPromise) {
         try {
             await maskLoadPromise;
         } catch (error) {
-            // Ошибка загрузки маски уже обработана в switchMask
+           // Ошибки загрузки уже логируются в switchMask
         }
         maskLoadPromise = null; // Сбрасываем Promise после завершения
     }
 
-    // Опции для детектора лиц
+    // Опции для детектора лиц (можно поиграть с minConfidence)
     const options = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 });
 
-    // Находим одно лицо на видео с его точками (landmarks)
-    const detection = await faceapi.detectSingleFace(video, options).withFaceLandmarks();
+    try {
+        // Находим одно лицо на видео с его точками (landmarks)
+        const detection = await faceapi.detectSingleFace(video, options).withFaceLandmarks();
 
-    // Устанавливаем реальные размеры canvas равными размерам видеоэлемента
-    // Это важно делать перед каждым рисованием, если размеры могут меняться
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-
-    // Очищаем холст перед новым рисованием
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // Если лицо найдено и текущая маска загружена
-    if (detection && currentMaskImage) {
-        const landmarks = detection.landmarks;
-        const isCrown = crownPaths.includes(allMaskPaths[currentMaskIndex]);
-
-        // Получаем координаты ключевых точек
-        const leftEyeBrow = landmarks.getLeftEyeBrow(); // Точки левой брови
-        const rightEyeBrow = landmarks.getRightEyeBrow(); // Точки правой брови
-        const nose = landmarks.getNose(); // Точки носа
-        const jawOutline = landmarks.getJawOutline(); // Контур челюсти
-
-        // --- Расчет позиции и размера маски ---
-
-        // Ширина лица (примерно по бровям или контуру челюсти)
-        const faceWidth = jawOutline[16].x - jawOutline[0].x; // Ширина по контуру челюсти
-        // Альтернатива: ширина по бровям
-        // const faceWidth = rightEyeBrow[4].x - leftEyeBrow[0].x;
-
-        let maskWidth, maskHeight, centerX, centerY;
-
-        if (isCrown) {
-            // --- Расчет для короны ---
-            maskWidth = faceWidth * 0.9; // Корона чуть уже лица
-            maskHeight = currentMaskImage.height * (maskWidth / currentMaskImage.width); // Сохраняем пропорции
-
-            // Центр по X - середина между бровями
-            centerX = (leftEyeBrow[0].x + rightEyeBrow[4].x) / 2;
-
-            // Центр по Y - немного выше самой верхней точки бровей
-            const browTopY = Math.min(...leftEyeBrow.map(p => p.y), ...rightEyeBrow.map(p => p.y));
-            centerY = browTopY - maskHeight * 0.6; // Поднимаем центр короны над бровями
-
-        } else {
-            // --- Расчет для очков ---
-            maskWidth = faceWidth * 1.0; // Очки по ширине лица (можно добавить коэфф. * 1.1 и т.п.)
-            maskHeight = currentMaskImage.height * (maskWidth / currentMaskImage.width);
-
-            // Центр по X - как у короны
-            centerX = (leftEyeBrow[0].x + rightEyeBrow[4].x) / 2;
-
-            // Центр по Y - примерно на уровне переносицы (между глаз)
-            const leftEye = landmarks.getLeftEye();
-            const rightEye = landmarks.getRightEye();
-            centerY = (leftEye[0].y + rightEye[3].y) / 2; // Середина между верхним краем левого и правого глаза
-            // Альтернатива: верхняя точка носа
-            // centerY = nose[0].y;
+        // Убедимся, что размеры canvas соответствуют видео (на случай изменения)
+        if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+             console.log("Обновление размеров canvas");
+             canvas.width = video.videoWidth;
+             canvas.height = video.videoHeight;
         }
 
-        // Координаты верхнего левого угла для рисования
-        let drawX = centerX - maskWidth / 2;
-        let drawY = centerY - maskHeight / 2;
 
-        // --- Рисуем маску на холсте ---
+        // Очищаем холст перед новым рисованием
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        // Важно: Видео у нас отражено через CSS (scaleX(-1)).
-        // Координаты от face-api соответствуют НЕОТРАЖЕННОМУ видео.
-        // Чтобы нарисовать маску на холсте, который лежит поверх ОТРАЖЕННОГО видео,
-        // нам нужно отразить координату X для рисования относительно ширины холста.
-        const mirroredX = canvas.width - (drawX + maskWidth);
+        // Если лицо найдено и текущая маска УСПЕШНО загружена (не null)
+        if (detection && currentMaskImage) {
+            // console.log("Лицо найдено, маска загружена. Рисуем..."); // Раскомментируй для отладки
+            const landmarks = detection.landmarks;
+            const isCrown = crownPaths.includes(allMaskPaths[currentMaskIndex]);
 
-        ctx.drawImage(currentMaskImage, mirroredX, drawY, maskWidth, maskHeight);
+            // Получаем координаты ключевых точек
+            const jawOutline = landmarks.getJawOutline(); // Контур челюсти
+            const leftEyeBrow = landmarks.getLeftEyeBrow();
+            const rightEyeBrow = landmarks.getRightEyeBrow();
+            const nose = landmarks.getNose();
+            const leftEye = landmarks.getLeftEye();
+            const rightEye = landmarks.getRightEye();
 
-    } else {
-        // Если лицо не найдено или маска не загружена, ничего не рисуем (холст уже очищен)
-        // console.log("Лицо не найдено или маска не загружена");
+
+             // --- Расчет позиции и размера маски ---
+             // Ширина лица (по внешним точкам бровей)
+             const faceWidth = rightEyeBrow[4].x - leftEyeBrow[0].x;
+
+             let maskWidth, maskHeight, centerX, centerY;
+             const scaleFactor = 1.1; // Небольшое увеличение маски для лучшего покрытия
+
+            if (isCrown) {
+                 // --- Расчет для короны ---
+                 maskWidth = faceWidth * 0.9 * scaleFactor; // Корона чуть уже лица, но увеличенная
+                 maskHeight = currentMaskImage.height * (maskWidth / currentMaskImage.width); // Сохраняем пропорции
+
+                 // Центр по X - середина между бровями
+                 centerX = (leftEyeBrow[0].x + rightEyeBrow[4].x) / 2;
+
+                 // Центр по Y - немного выше самой верхней точки бровей
+                 const browTopY = Math.min(...leftEyeBrow.map(p => p.y), ...rightEyeBrow.map(p => p.y));
+                 centerY = browTopY - maskHeight * 0.6; // Поднимаем центр короны над бровями
+
+            } else {
+                 // --- Расчет для очков ---
+                 maskWidth = faceWidth * 1.0 * scaleFactor; // Очки по ширине лица, увеличенные
+                 maskHeight = currentMaskImage.height * (maskWidth / currentMaskImage.width);
+
+                 // Центр по X - как у короны
+                 centerX = (leftEyeBrow[0].x + rightEyeBrow[4].x) / 2;
+
+                 // Центр по Y - примерно на уровне переносицы (между верхними точками глаз)
+                 // Используем среднее Y верхних точек глаз
+                 const eyeCenterY = (leftEye[1].y + leftEye[2].y + rightEye[1].y + rightEye[2].y) / 4;
+                 // Или немного ниже, ближе к центру глаз:
+                 // const eyeCenterY = (landmarks.getLeftEyeCenter().y + landmarks.getRightEyeCenter().y) / 2;
+
+                 centerY = eyeCenterY; // Помещаем центр очков на этот уровень
+            }
+
+            // Координаты верхнего левого угла для рисования
+            let drawX = centerX - maskWidth / 2;
+            let drawY = centerY - maskHeight / 2;
+
+             // --- Рисуем маску на холсте ---
+             // Важно: Видео отражено через CSS (scaleX(-1)).
+             // Координаты от face-api соответствуют НЕОТРАЖЕННОМУ видео.
+             // Отражаем координату X для рисования относительно ширины холста.
+            const mirroredX = canvas.width - (drawX + maskWidth);
+
+            // console.log(`Drawing at ${mirroredX.toFixed(1)}, ${drawY.toFixed(1)} size ${maskWidth.toFixed(1)}x${maskHeight.toFixed(1)}`); // Отладка координат
+            ctx.drawImage(currentMaskImage, mirroredX, drawY, maskWidth, maskHeight);
+
+        } else {
+            // Закомментировал, чтобы не спамить в консоль, если лицо не найдено
+            // if (!detection) console.log("Лицо не обнаружено.");
+            // if (!currentMaskImage && currentMaskIndex !== -1) console.log("Маска не загружена или ошибка загрузки.");
+        }
+
+    } catch (error) {
+        console.error("Ошибка в цикле детекции/рисования:", error);
+        // Можно добавить логику остановки или перезапуска при серьезной ошибке
+    } finally {
+         isDetecting = false; // Разрешаем следующий запуск
     }
+
 
     // Запускаем эту функцию снова для следующего кадра
     requestAnimationFrame(detectFaceAndDrawMask);
-    // Вместо requestAnimationFrame можно использовать setInterval для меньшей частоты:
-    // setTimeout(() => detectFaceAndDrawMask(), 100); // Обновление каждые 100 мс
+    // ИЛИ использовать setInterval для меньшей частоты и нагрузки:
+    // Замени requestAnimationFrame(detectFaceAndDrawMask) ниже на setTimeout,
+    // и убери вызов requestAnimationFrame(detectFaceAndDrawMask) из initialize()
+    // setTimeout(detectFaceAndDrawMask, 100); // например, 10 раз в секунду
 }
 
 // --- Инициализация приложения ---
 async function initialize() {
-    await loadModels(); // Сначала загружаем модели
-    const videoStarted = await startVideo(); // Затем запускаем видео
+    const modelsLoaded = await loadModels();
+    if (!modelsLoaded) return; // Прерываем инициализацию, если модели не загружены
+
+    const videoStarted = await startVideo();
 
     if (videoStarted) {
-        // Убедимся, что размеры canvas установлены после загрузки метаданных видео
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
+        // Убедимся, что video готово к воспроизведению перед добавлением обработчика
+        video.addEventListener('playing', () => {
+             console.log("Видео начало воспроизводиться.");
 
-        // Добавляем слушатель клика/тапа для смены маски
-        // Используем 'click' - он работает и для мыши, и для тапов на сенсорных экранах
-        document.body.addEventListener('click', switchMask);
+             // Добавляем слушатель клика/тапа для смены маски ТОЛЬКО после начала воспроизведения
+             document.body.addEventListener('click', switchMask);
 
-        // Загружаем первую случайную маску
-        switchMask();
+             // Загружаем первую случайную маску
+             switchMask();
 
-        // Скрываем сообщение о загрузке
-        loadingMessage.classList.add('hidden');
+             // Скрываем сообщение о загрузке
+             loadingMessage.classList.add('hidden');
 
-        // Начинаем цикл обнаружения лиц и рисования масок
-        // Небольшая задержка перед первым запуском, чтобы видео успело "прогреться"
-        setTimeout(detectFaceAndDrawMask, 500);
+             // Начинаем цикл обнаружения лиц и рисования масок
+             console.log("Запуск цикла детекции...");
+             // Убираем setTimeout, полагаемся на requestAnimationFrame
+              requestAnimationFrame(detectFaceAndDrawMask);
 
-        console.log('Приложение готово!');
+             console.log('Приложение готово!');
+        }, { once: true }); // Выполнить только один раз
+
+         // На случай если 'playing' не сработает (маловероятно, но все же)
+         video.play().catch(err => {
+             console.error("Ошибка при вызове video.play():", err);
+             if (!loadingMessage.classList.contains('hidden')) {
+                  loadingMessage.innerText = "Не удалось запустить видео. Проверьте разрешения браузера.";
+             }
+         });
+
     } else {
-        // Если видео не запустилось, оставляем сообщение об ошибке
+        // Если видео не запустилось, сообщение об ошибке уже показано в startVideo
         console.error('Не удалось запустить видео, приложение не может работать.');
+        if (!loadingMessage.classList.contains('hidden')) { // Убедимся, что сообщение видно
+             loadingMessage.innerText = "Не удалось запустить видео. Проверьте камеру и разрешения.";
+        }
     }
 }
 
