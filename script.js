@@ -4,22 +4,14 @@ const canvas = document.getElementById('canvas');
 const loadingMessage = document.getElementById('loading-message');
 const ctx = canvas.getContext('2d');
 
-// --- Убедись, что эти пути ТОЧНО совпадают с файлами в папке /masks ---
+// --- Пути к маскам (проверь их наличие и имена!) ---
 const glassesPaths = [
-    'masks/glasses1.png',
-    'masks/glasses2.png',
-    'masks/glasses3.png',
-    'masks/glasses4.png',
-    'masks/glasses5.png',
+    'masks/glasses1.png', 'masks/glasses2.png', 'masks/glasses3.png', 'masks/glasses4.png', 'masks/glasses5.png',
 ];
 const crownPaths = [
-    'masks/crown1.png',
-    'masks/crown2.png',
-    'masks/crown3.png',
-    'masks/crown4.png',
-    'masks/crown5.png',
+    'masks/crown1.png', 'masks/crown2.png', 'masks/crown3.png', 'masks/crown4.png', 'masks/crown5.png',
 ];
-// ---------------------------------------------------------------------
+// -----------------------------------------------------
 
 const allMaskPaths = [...glassesPaths, ...crownPaths];
 let currentMaskIndex = -1;
@@ -27,34 +19,38 @@ let currentMaskImage = null;
 let maskLoadPromise = null;
 let isDetecting = false;
 
-// --- Функция загрузки моделей ---
+// --- ИЗМЕНЕНО: Функция загрузки моделей с локального пути ---
 async function loadModels() {
-    const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1/model';
-    console.log('DEBUG: Загрузка моделей face-api...');
+    // Указываем путь к папке 'models' относительно index.html
+    const MODEL_URL = 'models';
+    console.log(`DEBUG: Загрузка локальных моделей из папки: ${MODEL_URL}`);
     try {
-        await Promise.all([
-            faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
-            faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL)
-        ]);
-        console.log('DEBUG: Модели face-api успешно загружены.');
+        // ИЗМЕНЕНО: Загружаем модели, файлы которых у тебя есть
+        // TinyFaceDetector - быстрый детектор
+        // FaceLandmark68Net - стандартная модель для 68 точек лица
+        // Если у тебя есть только tiny-версия landmark-модели, используй faceLandmark68TinyNet
+        console.log("DEBUG: Загрузка tinyFaceDetector...");
+        await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+        console.log("DEBUG: Загрузка faceLandmark68Net...");
+        await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+        // Если нужна tiny-версия landmark:
+        // await faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL);
+
+        console.log('DEBUG: Локальные модели успешно загружены.');
         return true;
     } catch (err) {
-        console.error('DEBUG: КРИТИЧЕСКАЯ ОШИБКА загрузки моделей:', err);
-        loadingMessage.innerText = `Ошибка загрузки моделей: ${err.message}. Попробуйте обновить страницу.`;
+        console.error('DEBUG: КРИТИЧЕСКАЯ ОШИБКА загрузки локальных моделей:', err);
+        loadingMessage.innerText = `Ошибка загрузки локальных моделей: ${err.message}. Проверьте наличие файлов в папке /models и их имена.`;
         return false;
     }
 }
 
-// --- Функция запуска видео ---
+// --- Функция запуска видео (без изменений) ---
 async function startVideo() {
     console.log('DEBUG: Запрос доступа к камере...');
     try {
         const constraints = {
-             video: {
-                width: { ideal: 720 },
-                height: { ideal: 560 },
-                facingMode: 'user'
-             }
+             video: { width: { ideal: 720 }, height: { ideal: 560 }, facingMode: 'user' }
         };
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         video.srcObject = stream;
@@ -81,116 +77,85 @@ async function startVideo() {
     }
 }
 
-// --- Функция смены маски ---
+// --- Функция смены маски (с отладочными логами) ---
 function switchMask() {
     if (allMaskPaths.length === 0) {
-        console.warn("DEBUG: Массив масок пуст, переключение невозможно.");
-        currentMaskImage = null;
-        return;
+        console.warn("DEBUG: Массив масок пуст.");
+        currentMaskImage = null; return;
     }
-
     let newIndex;
     if (allMaskPaths.length > 1) {
-        do {
-            newIndex = Math.floor(Math.random() * allMaskPaths.length);
-        } while (newIndex === currentMaskIndex);
-    } else {
-        newIndex = 0;
-    }
-
+        do { newIndex = Math.floor(Math.random() * allMaskPaths.length); } while (newIndex === currentMaskIndex);
+    } else { newIndex = 0; }
     currentMaskIndex = newIndex;
     const maskPath = allMaskPaths[currentMaskIndex];
     console.log(`DEBUG: Попытка загрузки маски: ${maskPath}`);
-    currentMaskImage = null; // Сбрасываем перед загрузкой
-
+    currentMaskImage = null;
     const img = new Image();
-    // img.crossOrigin = 'anonymous'; // Для GitHub Pages (тот же домен) не обязательно, но пусть будет
-
-    maskLoadPromise = new Promise((resolve) => { // Убрал reject, чтобы не ломать цепочку
+    maskLoadPromise = new Promise((resolve) => {
         img.onload = () => {
-            // === ВАЖНАЯ ПРОВЕРКА ===
             if (img.naturalWidth === 0 || img.height === 0) {
-                 console.error(`DEBUG: ОШИБКА: Маска ${maskPath} загружена, но имеет нулевые размеры! Файл поврежден или не является изображением?`);
+                 console.error(`DEBUG: ОШИБКА: Маска ${maskPath} загружена, но имеет нулевые размеры!`);
                  currentMaskImage = null;
             } else {
                 console.log(`DEBUG: Маска ${maskPath} УСПЕШНО ЗАГРУЖЕНА (размеры ${img.naturalWidth}x${img.height}).`);
-                currentMaskImage = img; // Сохраняем ТОЛЬКО если загрузка успешна и размеры корректны
-            }
-            resolve(); // Всегда резолвим, чтобы цикл детекции продолжился
+                currentMaskImage = img;
+            } resolve();
         };
         img.onerror = (err) => {
-            // === ВАЖНАЯ ПРОВЕРКА ===
-            console.error(`DEBUG: КРИТИЧЕСКАЯ ОШИБКА загрузки изображения маски: ${maskPath}. Проверьте путь и файл в репозитории!`, err);
-            currentMaskImage = null; // Убедимся, что маска null
-            resolve(); // Всегда резолвим
+            console.error(`DEBUG: КРИТИЧЕСКАЯ ОШИБКА загрузки изображения маски: ${maskPath}.`, err);
+            currentMaskImage = null; resolve();
         };
     });
-
     img.src = maskPath;
-    console.log(`DEBUG: Установлен src для маски: ${img.src}`); // Проверим, какой URL реально используется
+    console.log(`DEBUG: Установлен src для маски: ${img.src}`);
 }
 
-// --- Основная функция детекции и рисования ---
+// --- Основная функция детекции и рисования (ИЗМЕНЕНЫ опции детектора) ---
 async function detectFaceAndDrawMask() {
     if (isDetecting) {
-        // console.log("DEBUG: Предыдущий цикл детекции еще не завершен, пропуск кадра.");
-        requestAnimationFrame(detectFaceAndDrawMask); // Запросим следующий кадр
-        return;
+        requestAnimationFrame(detectFaceAndDrawMask); return;
     }
     isDetecting = true;
 
     if (video.paused || video.ended || video.readyState < video.HAVE_CURRENT_DATA) {
-         // console.log("DEBUG: Видео не готово или остановлено, ожидание...");
-         isDetecting = false;
-         requestAnimationFrame(detectFaceAndDrawMask);
-         return;
+         isDetecting = false; requestAnimationFrame(detectFaceAndDrawMask); return;
     }
 
-    // Ждем загрузки маски, если она идет
-    if (maskLoadPromise) {
-        // console.log("DEBUG: Ожидание загрузки маски...");
-        await maskLoadPromise;
-        // console.log("DEBUG: Ожидание загрузки маски завершено.");
-        maskLoadPromise = null;
-    }
+    if (maskLoadPromise) { await maskLoadPromise; maskLoadPromise = null; }
 
-    const options = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 });
+    // --- ИЗМЕНЕНО: Используем опции для TinyFaceDetector ---
+    const options = new faceapi.TinyFaceDetectorOptions({
+        inputSize: 512, // Популярный размер для этой модели, можно пробовать 320, 416, 608
+        scoreThreshold: 0.5 // Порог уверенности для обнаружения лица (0.1 - 0.9)
+    });
+    // -------------------------------------------------------
 
     try {
-        // === ВАЖНАЯ ПРОВЕРКА ===
-        // console.time("DEBUG: Время детекции лица"); // Замеряем время
-        const detection = await faceapi.detectSingleFace(video, options).withFaceLandmarks();
-        // console.timeEnd("DEBUG: Время детекции лица");
+        // Используем ту же функцию detectSingleFace, но с новыми опциями
+        const detection = await faceapi.detectSingleFace(video, options).withFaceLandmarks(); // Указываем .withFaceLandmarks() чтобы получить точки лица
 
-        // Убедимся, что размеры canvas соответствуют видео
         if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-             console.log("DEBUG: Обновление размеров canvas до", video.videoWidth, video.videoHeight);
-             canvas.width = video.videoWidth;
-             canvas.height = video.videoHeight;
+             canvas.width = video.videoWidth; canvas.height = video.videoHeight;
         }
-
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        // === ВАЖНЫЕ ПРОВЕРКИ перед рисованием ===
-        // console.log('DEBUG: Результат детекции (detection):', detection ? 'Лицо найдено' : 'Лицо НЕ найдено');
-        // console.log('DEBUG: Текущий объект маски (currentMaskImage):', currentMaskImage ? `Загружен (${currentMaskImage.src.split('/').pop()})` : 'NULL');
+        // console.log('DEBUG: Результат детекции:', detection ? 'Лицо найдено' : 'Лицо НЕ найдено'); // Раскомментируй для частой отладки
+        // console.log('DEBUG: Текущий объект маски:', currentMaskImage ? `Загружен (${currentMaskImage.src.split('/').pop()})` : 'NULL');
 
         if (detection && currentMaskImage) {
-            // console.log("DEBUG: Условие для рисования выполнено (detection && currentMaskImage).");
             const landmarks = detection.landmarks;
+            // Если использовали faceLandmark68TinyNet, точки могут быть менее точными
             const isCrown = crownPaths.includes(allMaskPaths[currentMaskIndex]);
-
             const jawOutline = landmarks.getJawOutline();
             const leftEyeBrow = landmarks.getLeftEyeBrow();
             const rightEyeBrow = landmarks.getRightEyeBrow();
             const leftEye = landmarks.getLeftEye();
             const rightEye = landmarks.getRightEye();
 
-            // Ширина лица (по внешним точкам бровей)
-             const faceWidth = rightEyeBrow[4].x - leftEyeBrow[0].x;
-
-             let maskWidth, maskHeight, centerX, centerY;
-             const scaleFactor = 1.1; // Коэффициент масштаба
+            const faceWidth = rightEyeBrow[4].x - leftEyeBrow[0].x;
+            let maskWidth, maskHeight, centerX, centerY;
+            const scaleFactor = 1.1;
 
             if (isCrown) {
                  maskWidth = faceWidth * 0.9 * scaleFactor;
@@ -198,7 +163,7 @@ async function detectFaceAndDrawMask() {
                  centerX = (leftEyeBrow[0].x + rightEyeBrow[4].x) / 2;
                  const browTopY = Math.min(...leftEyeBrow.map(p => p.y), ...rightEyeBrow.map(p => p.y));
                  centerY = browTopY - maskHeight * 0.6;
-            } else { // Очки
+            } else {
                  maskWidth = faceWidth * 1.0 * scaleFactor;
                  maskHeight = currentMaskImage.height * (maskWidth / currentMaskImage.width);
                  centerX = (leftEyeBrow[0].x + rightEyeBrow[4].x) / 2;
@@ -208,77 +173,62 @@ async function detectFaceAndDrawMask() {
 
             let drawX = centerX - maskWidth / 2;
             let drawY = centerY - maskHeight / 2;
-
-            // Отражаем X для рисования на зеркальном видео
             const mirroredX = canvas.width - (drawX + maskWidth);
 
-             // === ВАЖНАЯ ПРОВЕРКА перед вызовом drawImage ===
-             console.log(`DEBUG: Параметры рисования: img=${currentMaskImage.src.split('/').pop()}, x=${mirroredX.toFixed(1)}, y=${drawY.toFixed(1)}, w=${maskWidth.toFixed(1)}, h=${maskHeight.toFixed(1)}`);
+            // console.log(`DEBUG: Параметры рисования: img=${currentMaskImage.src.split('/').pop()}, x=${mirroredX.toFixed(1)}, y=${drawY.toFixed(1)}, w=${maskWidth.toFixed(1)}, h=${maskHeight.toFixed(1)}`);
 
-             if (currentMaskImage && !isNaN(mirroredX) && !isNaN(drawY) && !isNaN(maskWidth) && !isNaN(maskHeight) && maskWidth > 0 && maskHeight > 0) {
+            if (currentMaskImage && !isNaN(mirroredX) && !isNaN(drawY) && !isNaN(maskWidth) && !isNaN(maskHeight) && maskWidth > 0 && maskHeight > 0) {
+                 // --- ТЕСТ: Рисуем прямоугольник (если маски все еще не видны) ---
+                 // ctx.fillStyle = 'rgba(0, 255, 0, 0.5)'; // Зеленый полупрозрачный
+                 // ctx.fillRect(mirroredX, drawY, maskWidth, maskHeight);
+                 // console.log("DEBUG: Нарисован тестовый ЗЕЛЕНЫЙ прямоугольник.");
+                 // --- Закомментируй строки выше и раскомментируй строку ниже для рисования маски ---
                  ctx.drawImage(currentMaskImage, mirroredX, drawY, maskWidth, maskHeight);
-                 // console.log("DEBUG: Вызов ctx.drawImage выполнен.");
-             } else {
-                 console.warn("DEBUG: Пропуск ctx.drawImage из-за невалидных параметров или отсутствия изображения.");
-             }
 
+            } else {
+                 console.warn("DEBUG: Пропуск ctx.drawImage из-за невалидных параметров.");
+            }
         } else {
-             if (!detection) { /* console.log("DEBUG: Лицо не обнаружено в этом кадре."); */ } // Раскомментируй, если нужно видеть это постоянно
-             if (!currentMaskImage && currentMaskIndex !== -1) { console.warn("DEBUG: Попытка рисования, но currentMaskImage is NULL (ошибка загрузки маски?)."); }
+             // Логирование отсутствия детекции или маски при необходимости
         }
 
     } catch (error) {
         console.error("DEBUG: ОШИБКА в цикле детекции/рисования:", error);
     } finally {
-         isDetecting = false; // Разрешаем следующий запуск
+         isDetecting = false;
     }
 
     requestAnimationFrame(detectFaceAndDrawMask);
 }
 
-// --- Инициализация ---
+// --- Инициализация (без изменений) ---
 async function initialize() {
-    console.log("DEBUG: Начало инициализации приложения.");
+    console.log("DEBUG: Начало инициализации приложения (локальные модели).");
     const modelsLoaded = await loadModels();
-    if (!modelsLoaded) {
-        console.error("DEBUG: Инициализация прервана: модели не загружены.");
-        return;
-    }
+    if (!modelsLoaded) { console.error("DEBUG: Инициализация прервана: модели не загружены."); return; }
 
     const videoStarted = await startVideo();
-    if (!videoStarted) {
-        console.error("DEBUG: Инициализация прервана: видео не запущено.");
-        // Сообщение об ошибке уже должно быть видно
-        return;
-    }
+    if (!videoStarted) { console.error("DEBUG: Инициализация прервана: видео не запущено."); return; }
 
     video.addEventListener('playing', () => {
          console.log("DEBUG: Видео начало воспроизводиться (событие 'playing').");
-
-         // Убираем старый листенер, если он был, и добавляем новый
          document.body.removeEventListener('click', switchMask);
          document.body.addEventListener('click', switchMask);
          console.log("DEBUG: Обработчик клика для смены маски добавлен.");
-
          console.log("DEBUG: Загрузка ПЕРВОЙ случайной маски...");
          switchMask();
-
          loadingMessage.classList.add('hidden');
          console.log("DEBUG: Сообщение о загрузке скрыто.");
-
          console.log("DEBUG: Запуск ОСНОВНОГО цикла детекции/рисования...");
          requestAnimationFrame(detectFaceAndDrawMask);
-
          console.log('DEBUG: Инициализация УСПЕШНО завершена!');
-    }, { once: true }); // Сработает только один раз
+    }, { once: true });
 
-    // Попытка запустить воспроизведение (важно для некоторых браузеров/автоплея)
     video.play().catch(err => {
          console.error("DEBUG: Ошибка при вызове video.play():", err);
-         // Показать сообщение, если оно еще не показано и скрыто
          if (loadingMessage.classList.contains('hidden')) {
              loadingMessage.classList.remove('hidden');
-             loadingMessage.innerText = "Не удалось автоматически запустить видео. Возможно, нужно взаимодействие с пользователем (клик) или проблема с разрешениями.";
+             loadingMessage.innerText = "Не удалось автоматически запустить видео.";
          }
     });
 }
