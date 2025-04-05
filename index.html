@@ -17,9 +17,10 @@
         <canvas id="canvas"></canvas>
     </div>
 
-    <!-- ИЗМЕНЕНО: Подключаем локальную версию face-api.js -->
-    <script defer src="libs/face-api.min.js"></script>
-    <!-- Подключаем наш скрипт -->
+    <!-- Библиотека загружается синхронно до парсинга остального -->
+    <script src="libs/face-api.min.js"></script>
+
+    <!-- Наш скрипт ждет загрузки HTML -->
     <script defer src="script.js"></script>
 </body>
 </html>
